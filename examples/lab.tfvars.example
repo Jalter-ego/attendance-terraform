@@ -1,0 +1,7 @@
+aws_profile         = "attendance-terraform"
+aws_region          = "us-east-2"
+aws_account_id      = "123456789012"
+deployment_name     = "attendance-tf-tu-nombre"
+ssh_allowed_cidr    = "203.0.113.10/32"
+ssh_public_key_path = "../.local/ssh/attendance-terraform.pub"
+instance_type       = "t3.small"
