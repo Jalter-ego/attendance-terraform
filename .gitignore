@@ -1,0 +1,20 @@
+# Terraform runtime and local state (one independent lab per checkout).
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+*.tfbackend
+!*.tfbackend.example
+.local/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+tests
