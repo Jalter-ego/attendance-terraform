@@ -1,0 +1,40 @@
+#!/bin/bash
+set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a
+ROLE='${role}'
+NODE_VERSION='${node_version}'
+PNPM_VERSION='${pnpm_version}'
+
+apt-get -o Acquire::Retries=3 update
+apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
+  ca-certificates curl git xz-utils openssl python3
+
+if ! swapon --show | grep -q /swapfile; then
+  fallocate -l 2G /swapfile
+  chmod 600 /swapfile
+  mkswap /swapfile
+  swapon /swapfile
+  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+fi
+
+NODE_ARCHIVE="node-v$NODE_VERSION-linux-x64.tar.xz"
+install -d /var/tmp/attendance-node
+cd /var/tmp/attendance-node
+curl --fail --show-error --location --retry 4 --remote-name "https://nodejs.org/dist/v$NODE_VERSION/$NODE_ARCHIVE"
+curl --fail --show-error --location --retry 4 --remote-name "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt"
+grep " $NODE_ARCHIVE$" SHASUMS256.txt | sha256sum --check -
+tar -xJf "$NODE_ARCHIVE" -C /usr/local --strip-components=1
+npm install --global "pnpm@$PNPM_VERSION"
+
+install -d -o ubuntu -g ubuntu /opt/attendance /opt/attendance/releases
+install -d -m 700 /etc/attendance
+install -d /var/lib/attendance
+
+if [ "$ROLE" = frontend ]; then
+  apt-get -o Acquire::Retries=3 install -y nginx
+  echo 'Attendance: infraestructura lista; falta publicar el frontend.' > /var/www/html/index.html
+  systemctl enable --now nginx
+fi
+
+touch /var/lib/attendance/bootstrap.ready
