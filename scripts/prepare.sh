@@ -2,29 +2,31 @@
 set -euo pipefail
 ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 PROFILE=${AWS_PROFILE:-attendance-terraform}
-REGION=$(aws configure get region --profile "$PROFILE")
-: "${REGION:?Configure a region in your AWS CLI profile first}"
+REGION=$(jq -er '.aws_region' "$ROOT/infra/team.auto.tfvars.json")
+EXPECTED_ACCOUNT=$(jq -er '.aws_account_id' "$ROOT/infra/team.auto.tfvars.json")
 ACCOUNT=$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text --no-cli-pager)
-IP=$(curl --fail --silent --show-error --retry 3 https://checkip.amazonaws.com)
-NAME=${ATTENDANCE_DEPLOYMENT:-attendance-tf-$(id -un)}
+if [ "$ACCOUNT" != "$EXPECTED_ACCOUNT" ]; then
+  echo "Expected AWS account $EXPECTED_ACCOUNT; the selected profile belongs to $ACCOUNT." >&2
+  exit 1
+fi
+NAME=$(jq -er '.deployment_name' "$ROOT/infra/team.auto.tfvars.json")
 KEY="$ROOT/.local/ssh/attendance-terraform"
 
 if [ -e "$ROOT/infra/lab.auto.tfvars.json" ]; then
-  echo 'Local configuration already exists. Edit infra/lab.auto.tfvars.json to change it.'
+  echo 'An old personal infra/lab.auto.tfvars.json exists. Back it up under .local/ before joining the shared environment.' >&2
+  exit 1
+fi
+if [ -e "$ROOT/infra/terraform.tfvars" ] || [ -e "$ROOT/infra/terraform.tfvars.json" ]; then
+  echo 'Remove personal Terraform variable overrides before joining the shared environment.' >&2
   exit 1
 fi
 install -d -m 700 "$ROOT/.local" "$ROOT/.local/ssh"
 if [ ! -f "$KEY" ]; then
-  ssh-keygen -t ed25519 -N '' -C "$NAME-operator" -f "$KEY"
+  ssh-keygen -t ed25519 -N '' -C "$NAME-$(id -un)" -f "$KEY"
 fi
 if [ ! -f "$KEY.pub" ]; then ssh-keygen -y -f "$KEY" > "$KEY.pub"; fi
 chmod 600 "$KEY"
 
-umask 077
-jq -n --arg profile "$PROFILE" --arg region "$REGION" --arg account "$ACCOUNT" \
-  --arg name "$NAME" --arg cidr "$IP/32" '{
-    aws_profile: $profile, aws_region: $region, aws_account_id: $account,
-    deployment_name: $name, ssh_allowed_cidr: $cidr,
-    ssh_public_key_path: "../.local/ssh/attendance-terraform.pub", instance_type: "t3.small"
-  }' > "$ROOT/infra/lab.auto.tfvars.json"
-echo "Prepared $NAME in $REGION. No AWS resources have been created."
+echo "Prepared personal access for $NAME in $REGION using AWS profile $PROFILE."
+echo 'Shared variables have not been changed. Share only the .pub key with the operator when SSH access is needed.'
+echo "Next: export AWS_PROFILE=$PROFILE; terraform -chdir=infra init"
