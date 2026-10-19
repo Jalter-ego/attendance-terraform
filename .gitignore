@@ -1,4 +1,4 @@
-# Terraform runtime and local state (one independent lab per checkout).
+# Runtime, private settings and local state backups.
 **/.terraform/
 *.tfstate
 *.tfstate.*
@@ -8,6 +8,7 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 !*.tfvars.example
+!infra/team.auto.tfvars.json
 *.tfbackend
 !*.tfbackend.example
 .local/

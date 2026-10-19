@@ -1,7 +1,10 @@
-aws_profile         = "attendance-terraform"
-aws_region          = "us-east-2"
-aws_account_id      = "123456789012"
-deployment_name     = "attendance-tf-tu-nombre"
-ssh_allowed_cidr    = "203.0.113.10/32"
-ssh_public_key_path = "../.local/ssh/attendance-terraform.pub"
-instance_type       = "t3.small"
+# Reference only. The team's real common values are committed in infra/team.auto.tfvars.json.
+# Do not copy this file as personal overrides for the shared environment.
+aws_region                  = "us-east-2"
+aws_account_id              = "123456789012"
+deployment_name             = "attendance-tf-team"
+ssh_allowed_cidr            = "203.0.113.10/32"
+additional_ssh_allowed_cidrs = []
+ssh_public_key_path         = "keys/operator.pub"
+ubuntu_ami_id               = "ami-0123456789abcdef0"
+instance_type               = "t3.small"

@@ -1,8 +1,9 @@
 # Attendance · laboratorio AWS con Terraform
 
-Crea dos instancias EC2 propias: frontend React con Nginx y backend NestJS conectado
-a la base de datos existente en Supabase. Usa una VPC independiente; 
-Cada compañero debe usar su propio nombre de despliegue, clave y estado.
+Administra un único entorno compartido del equipo: dos instancias EC2, frontend
+React con Nginx y backend NestJS conectado al Supabase existente. La rama `master`
+contiene la configuración común; el estado oficial se guarda en un bucket S3 privado.
+Cada desarrollador utiliza sus propias credenciales de AWS y su clave SSH personal.
 
 ## Arquitectura y alcance
 
@@ -14,9 +15,11 @@ Navegador -> frontend:80 (Nginx, React dist)
                                               +-> Supabase Session pooler:5432 (SSL)
 ```
 
-- Ubuntu 24.04 oficial de Canonical, Node.js 24.19.0 y pnpm 10.11.0.
+- Ubuntu 24.04 oficial de Canonical, Node.js 24.15.0 y pnpm 10.11.0.
 - Dos `t3.small` por defecto, cada una con 20 GiB gp3 cifrados y 2 GiB de swap.
-- HTTP público; SSH solo desde la IPv4 `/32` del operador.
+- HTTP público; SSH desde la IPv4 `/32` del operador y las direcciones adicionales aprobadas.
+- Ubuntu tiene una AMI fija para que ambos desarrolladores obtengan planes consistentes.
+- S3 guarda el estado cifrado, con versionado y bloqueo nativo mediante `.tflock`.
 - La API solo acepta tráfico del grupo de seguridad del frontend. No se instala
   PostgreSQL en las EC2. Ambas máquinas tienen IPv4 pública para instalar paquetes
   y permitir SSH; no se usa NAT Gateway, balanceador ni RDS en esta práctica.
@@ -53,25 +56,69 @@ GitHub en su computadora. El despliegue genera paquetes de commits con `git arch
 y los copia a las EC2 por SSH; no necesita deploy keys de GitHub en las instancias.
 Nunca empaqueta los archivos locales sin confirmar ni los `.env` ignorados por Git.
 
-## 1. Preparar la configuración local
+## 1. Conectarse al entorno compartido
 
-Desde la raíz de este repositorio:
+La cuenta, región, nombre del despliegue, AMI, tamaño y reglas comunes están en
+`infra/team.auto.tfvars.json`.
+`infra/keys/operator.pub` es la clave PÚBLICA estable del acceso inicial a las EC2.
+No la reemplaces por tu propia clave al clonar, porque cambiaría la infraestructura.
+
+Cada participante configura un perfil en su computadora con sus propias credenciales:
+
+```bash
+aws configure --profile attendance-terraform
+export AWS_PROFILE=attendance-terraform
+aws sts get-caller-identity
+./scripts/prepare.sh
+terraform -chdir=infra init
+terraform -chdir=infra workspace show
+terraform -chdir=infra state list
+terraform -chdir=infra plan
+```
+
+Usa la cuenta `929571213233` y el workspace `default`. El perfil puede tener otro
+nombre si exportas `AWS_PROFILE` con ese nombre. `prepare.sh` verifica la cuenta y
+prepara una clave SSH personal; no cambia las variables comunes ni crea recursos.
+La clave nueva no queda autorizada automáticamente en EC2.
+
+No ejecutes la preparación antigua que generaba un despliegue por persona. Si
+conservas `infra/lab.auto.tfvars.json`, muévelo a un respaldo privado en `.local/`
+antes de unirte al entorno. Evita archivos `.tfvars` personales y variables `TF_VAR_*`
+que cambien recursos compartidos; los cambios comunes se revisan mediante PR.
+
+### Preparación inicial del bucket: solo el operador y una sola vez
 
 ```bash
 export AWS_PROFILE=attendance-terraform
-export ATTENDANCE_DEPLOYMENT=attendance-tf-tu-nombre
-./scripts/prepare.sh
+./scripts/setup-state.sh
 ```
 
-El script consulta la cuenta, la región del perfil y la IP pública de tu conexión.
-Genera una clave SSH de operador en `.local/ssh/` y crea
-`infra/lab.auto.tfvars.json`. Estos archivos están excluidos de Git. Si ya existe
-la configuración, el script no la sobrescribe. Puedes editarla o usar como base
-`examples/lab.tfvars.example`.
+El bucket definido en `infra/backend.tf` debe existir antes de `terraform init`.
+El script verifica la cuenta y crea o configura el bucket privado, con bloqueo de
+acceso público, versionado, cifrado AES256 y una política que exige HTTPS. No crea
+EC2 ni concede permisos a usuarios. Está separado del Terraform de las aplicaciones:
+`terraform destroy` conserva el bucket y su historial de estado. Volver a ejecutar
+este script restablece la configuración de este bucket dedicado; úsalo solo allí.
 
-La clave es para entrar a EC2; no es una deploy key de GitHub. Conserva la clave y
-el estado para administrar este entorno. Si cambia tu IP de salida, actualiza
-`ssh_allowed_cidr` y revisa/aplica un nuevo plan.
+Si estás migrando un estado local existente, haz una copia privada y ejecuta desde
+la computadora que tiene el estado oficial:
+
+```bash
+install -d -m 700 .local
+cp infra/terraform.tfstate .local/state-before-s3.tfstate
+chmod 600 .local/state-before-s3.tfstate
+terraform -chdir=infra init -migrate-state
+```
+
+Revisa la pregunta de migración antes de confirmarla. Migra una sola vez y no
+sobrescribas un estado remoto que ya utiliza el equipo. Los demás participantes
+solo ejecutan `terraform init`; no deben migrar estados personales al mismo destino.
+No subas el archivo manualmente con `aws s3 cp`. Terraform administra la persistencia
+y el bloqueo. En un entorno todavía sin EC2, una actualización de estado con
+`terraform -chdir=infra apply -refresh-only` puede guardar sus salidas iniciales
+sin crear infraestructura. La creación real se hace después con un plan normal.
+
+### Variables del backend de Attendance: solo para quien haga deploy
 
 Prepara por separado el archivo privado de variables del backend:
 
@@ -95,7 +142,7 @@ el valor configurado. Para contraseñas que contengan `#` o espacios, utiliza co
 simples o dobles siguiendo el formato dotenv. No se evalúan como comandos de shell.
 
 Puedes elegir otro archivo con `ATTENDANCE_BACKEND_ENV=/ruta/privada/backend.env`.
-No guardes credenciales en `lab.auto.tfvars.json` ni en el frontend.
+No guardes credenciales en `team.auto.tfvars.json`, en `backend.tf` ni en el frontend.
 
 ## 2. Validar y revisar el plan
 
@@ -103,16 +150,14 @@ No guardes credenciales en `lab.auto.tfvars.json` ni en el frontend.
 terraform -chdir=infra init
 terraform -chdir=infra fmt -check -recursive
 terraform -chdir=infra validate
-terraform -chdir=infra test
-node --test --test-isolation=none tests/environment.test.cjs
-terraform -chdir=infra plan -out=../.local/lab.tfplan
+terraform -chdir=infra plan -lock-timeout=60s -out=../.local/lab.tfplan
 terraform -chdir=infra show ../.local/lab.tfplan
 ```
 
-Las pruebas usan un proveedor simulado y no crean recursos. El plan real consulta
-AWS. Comprueba cuenta, región, dos instancias, tipos de instancia, discos y reglas
-de acceso antes de aplicar. No reutilices estados ni claves del laboratorio de
-OpenTofu.
+El plan consulta AWS y el estado compartido. Comprueba cuenta, región, dos
+instancias, discos y reglas de acceso. Un plan sobre un entorno ya creado debe
+reconocer esos recursos; no debería proponer duplicarlos. No reutilices el mismo
+objeto de estado para el despliegue independiente de OpenTofu.
 
 ## 3. Crear las instancias
 
@@ -172,7 +217,7 @@ huellas de la instancia, utiliza la salida de consola de EC2.
 
 ## 5. Probar acceso y tenants
 
-Abre la URL de tenant que muestra el despliegue o `terraform output frontend_demo_url`.
+Abre la URL de tenant que muestra el despliegue o `terraform -chdir=infra output frontend_demo_url`.
 Por ejemplo, si el frontend tiene IP `3.143.17.104`:
 
 ```text
@@ -205,11 +250,22 @@ para adoptar esta configuración en un despliegue existente; ejecuta
 
 ## Estado y cambios posteriores
 
-Esta primera práctica usa estado local `infra/terraform.tfstate`, excluido de Git,
-y una clave local. No compartas ni ejecutes el mismo despliegue desde varios clones
-independientes: podrían crear recursos duplicados sin conocer el estado anterior.
-Para administración compartida, migra el estado a un backend S3 propio con
-versionado y bloqueo, y permisos por entorno. No uses el estado de OpenTofu.
+El estado oficial está en
+`s3://attendance-tfstate-929571213233-us-east-2/attendance/equipo/terraform.tfstate`.
+El bloqueo usa el objeto auxiliar `terraform.tfstate.tflock`; las versiones de S3
+son historial del mismo estado. Todos usan el mismo bucket, key y workspace.
+No mezcles este estado con el del laboratorio de OpenTofu.
+
+Un compañero actualiza `master`, ejecuta `terraform plan` y revisa el resultado
+antes de aplicar. El bloqueo impide escrituras simultáneas de Terraform, pero no
+resuelve diferencias de código o variables: primero integren el cambio mediante PR.
+Coordinen las publicaciones de `deploy.sh`, que operan por SSH y no adquieren el
+bloqueo de Terraform. Los planes y las copias privadas del estado siguen fuera de Git.
+Conserva las claves privadas y el entorno del backend aunque el estado esté en S3.
+
+Si cambian las IP públicas después de detener/encender EC2, sincroniza el estado
+con `terraform -chdir=infra apply -refresh-only` y vuelve a desplegar el frontend
+para compilar el nuevo dominio. Revisa primero el plan que muestra el comando.
 
 Actualizar aplicaciones requiere volver a ejecutar `deploy.sh`; no recrear EC2.
 El script conserva versiones anteriores en disco. Los cambios de esquema de la
@@ -229,12 +285,15 @@ terraform -chdir=infra destroy
 ```
 
 La eliminación borra las dos EC2 y sus discos. La base de Supabase se conserva.
-No elimina recursos externos del despliegue de OpenTofu. Confirma que AWS ya no
-tenga las instancias y volúmenes del laboratorio antes de borrar el estado local.
+No elimina recursos externos del despliegue de OpenTofu. El estado remoto seguirá
+registrando la eliminación. No borres el bucket ni el objeto de estado al finalizar
+la práctica; el equipo puede reutilizarlos para volver a crear el entorno.
 
 ## Diagnóstico
 
-- Fallo de SSH: revisar IP `/32`, estado de EC2 y ruta de la clave local.
+- S3 AccessDenied: verificar cuenta, perfil, permisos del estado y del archivo `.tflock`.
+- Estado bloqueado: esperar al otro operador; no forzar el desbloqueo de una operación activa.
+- Fallo de SSH: revisar las IP `/32`, la autorización de la clave personal y el estado de EC2.
 - Preparación incompleta: `sudo cloud-init status --long` y
   `sudo less /var/log/cloud-init-output.log` dentro de la instancia.
 - API: `sudo systemctl status attendance-backend` y
