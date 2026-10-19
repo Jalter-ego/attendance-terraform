@@ -1,13 +1,14 @@
 variable "aws_region" {
-  description = "AWS region for this independent lab."
+  description = "AWS region of the shared team environment."
   type        = string
   default     = "us-east-2"
 }
 
 variable "aws_profile" {
-  description = "Local AWS CLI profile; credentials never go in this repository."
+  description = "Optional personal AWS profile override. Normally use AWS_PROFILE locally."
   type        = string
-  default     = "attendance-terraform"
+  default     = null
+  nullable    = true
 }
 
 variable "aws_account_id" {
@@ -20,7 +21,7 @@ variable "aws_account_id" {
 }
 
 variable "deployment_name" {
-  description = "Unique name per classmate/tool, for example attendance-tf-jeanne."
+  description = "Common deployment name. Every teammate must use the same value."
   type        = string
   validation {
     condition     = can(regex("^[a-z][a-z0-9-]{2,39}$", var.deployment_name))
@@ -29,7 +30,7 @@ variable "deployment_name" {
 }
 
 variable "ssh_allowed_cidr" {
-  description = "Your public IPv4 as a /32. SSH must not be exposed to the whole internet."
+  description = "Primary operator IPv4 /32, committed as part of the shared configuration."
   type        = string
   validation {
     condition     = can(cidrnetmask(var.ssh_allowed_cidr)) && endswith(var.ssh_allowed_cidr, "/32")
@@ -37,10 +38,29 @@ variable "ssh_allowed_cidr" {
   }
 }
 
-variable "ssh_public_key_path" {
-  description = "Path to the local EC2 access PUBLIC key (.pub)."
+variable "additional_ssh_allowed_cidrs" {
+  description = "Additional approved teammate IPv4 /32 ranges; SSH keys are authorized separately."
+  type        = set(string)
+  default     = []
+  validation {
+    condition     = alltrue([for cidr in var.additional_ssh_allowed_cidrs : can(cidrnetmask(cidr)) && endswith(cidr, "/32")])
+    error_message = "Each additional SSH address must be a public IPv4 followed by /32."
+  }
+}
+
+variable "ubuntu_ami_id" {
+  description = "Pinned official Ubuntu AMI in the shared region; update through a reviewed plan."
   type        = string
-  default     = "../.local/ssh/attendance-terraform.pub"
+  validation {
+    condition     = can(regex("^ami-[a-f0-9]{17}$", var.ubuntu_ami_id))
+    error_message = "Provide the pinned Ubuntu AMI ID for the team's region."
+  }
+}
+
+variable "ssh_public_key_path" {
+  description = "Stable bootstrap PUBLIC key in this repository, relative to infra/. Never a private key."
+  type        = string
+  default     = "keys/operator.pub"
 }
 
 variable "instance_type" {

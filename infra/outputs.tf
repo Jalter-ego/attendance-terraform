@@ -1,25 +1,25 @@
 output "frontend_url" {
-  value = "http://${aws_instance.app["frontend"].public_ip}"
+  value = try("http://${aws_instance.app["frontend"].public_ip}", null)
 }
 
 output "frontend_ip" {
-  value = aws_instance.app["frontend"].public_ip
+  value = try(aws_instance.app["frontend"].public_ip, null)
 }
 
 output "frontend_base_domain" {
-  value = "${replace(aws_instance.app["frontend"].public_ip, ".", "-")}.sslip.io"
+  value = try("${replace(aws_instance.app["frontend"].public_ip, ".", "-")}.sslip.io", null)
 }
 
 output "frontend_demo_url" {
-  value = "http://demo.${replace(aws_instance.app["frontend"].public_ip, ".", "-")}.sslip.io/"
+  value = try("http://demo.${replace(aws_instance.app["frontend"].public_ip, ".", "-")}.sslip.io/", null)
 }
 
 output "backend_ip" {
-  value = aws_instance.app["backend"].public_ip
+  value = try(aws_instance.app["backend"].public_ip, null)
 }
 
 output "backend_private_ip" {
-  value = aws_instance.app["backend"].private_ip
+  value = try(aws_instance.app["backend"].private_ip, null)
 }
 
 output "instance_ids" {
