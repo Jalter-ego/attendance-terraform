@@ -30,6 +30,8 @@ resource "aws_instance" "app" {
 
   ami                         = data.aws_ami.ubuntu.id
   instance_type               = var.instance_type
+  ebs_optimized               = true
+  monitoring                  = true
   subnet_id                   = aws_subnet.public.id
   associate_public_ip_address = true
   vpc_security_group_ids      = [each.value]
