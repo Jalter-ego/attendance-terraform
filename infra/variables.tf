@@ -74,8 +74,9 @@ variable "instance_type" {
 }
 
 variable "node_version" {
-  type    = string
-  default = "24.15.0"
+  description = "Exact Node.js 24 version installed on the application instances."
+  type        = string
+  default     = "24.15.0"
   validation {
     condition     = can(regex("^24\\.[0-9]+\\.[0-9]+$", var.node_version))
     error_message = "Provide a Node.js 24 release number."
@@ -83,8 +84,9 @@ variable "node_version" {
 }
 
 variable "pnpm_version" {
-  type    = string
-  default = "10.11.0"
+  description = "Exact pnpm version installed on the application instances."
+  type        = string
+  default     = "10.11.0"
   validation {
     condition     = can(regex("^[0-9]+\\.[0-9]+\\.[0-9]+$", var.pnpm_version))
     error_message = "Provide an exact pnpm release number."
