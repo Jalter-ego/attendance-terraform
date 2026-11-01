@@ -1,0 +1,93 @@
+#cloud-config
+# Frontend de attendance: app React servida por nginx, que reenvia el API al backend.
+# Plantilla compartida con Pulumi y CloudFormation: la sintaxis de llaves con dolar
+# queda reservada a sus variables; los comandos usan $VAR sin llaves.
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - xz-utils
+  - nginx
+
+swap:
+  filename: /swapfile
+  size: 2147483648
+
+write_files:
+  - path: /usr/local/sbin/attendance-install-node
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Node.js 24 oficial (el paquete nodejs de Ubuntu 24.04 es la version 18) y pnpm.
+      set -euo pipefail
+      NODE_VERSION=$1
+      PNPM_VERSION=$2
+      ARCHIVE="node-v$NODE_VERSION-linux-x64.tar.xz"
+      install -d /var/tmp/attendance-node
+      cd /var/tmp/attendance-node
+      curl --fail --show-error --location --retry 4 --remote-name "https://nodejs.org/dist/v$NODE_VERSION/$ARCHIVE"
+      curl --fail --show-error --location --retry 4 --remote-name "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt"
+      grep " $ARCHIVE$" SHASUMS256.txt | sha256sum --check -
+      tar -xJf "$ARCHIVE" -C /usr/local --strip-components=1
+      npm install --global "pnpm@$PNPM_VERSION"
+
+  - path: /usr/local/sbin/attendance-build-frontend
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Se ejecuta como ubuntu. El tenant sale del subdominio: demo.<ip-con-guiones>.sslip.io
+      set -euo pipefail
+      TOKEN=$(curl --fail --silent -X PUT http://169.254.169.254/latest/api/token \
+        -H 'X-aws-ec2-metadata-token-ttl-seconds: 300')
+      PUBLIC_IP=$(curl --fail --silent -H "X-aws-ec2-metadata-token: $TOKEN" \
+        http://169.254.169.254/latest/meta-data/public-ipv4)
+      cd /opt/attendance/frontend
+      pnpm install --frozen-lockfile
+      VITE_API_URL=/core/api/v1 \
+      VITE_TENANT_BASE_DOMAIN="$(echo "$PUBLIC_IP" | tr . -).sslip.io" \
+      VITE_DEFAULT_TENANT=demo \
+        pnpm build
+
+  # Se escribe despues de instalar nginx para no chocar con su configuracion inicial.
+  - path: /etc/nginx/sites-available/attendance
+    defer: true
+    content: |
+      server {
+          listen 80 default_server;
+          server_name _;
+          root /var/www/attendance;
+          index index.html;
+          client_max_body_size 25m;
+
+          location /core/api/v1 {
+              proxy_pass http://${backend_private_ip}:5000;
+              proxy_http_version 1.1;
+              proxy_set_header Host $host;
+              proxy_set_header X-Real-IP $remote_addr;
+              proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+              proxy_set_header X-Forwarded-Proto $scheme;
+          }
+
+          location / {
+              try_files $uri $uri/ /index.html;
+          }
+      }
+
+runcmd:
+  - set -e
+  - /usr/local/sbin/attendance-install-node '${node_version}' '${pnpm_version}'
+  - install -d -o ubuntu -g ubuntu /opt/attendance
+  - sudo -u ubuntu -H git clone --depth 1 --branch '${frontend_ref}' '${frontend_repo}' /opt/attendance/frontend
+  - sudo -u ubuntu -H /usr/local/sbin/attendance-build-frontend
+  - install -d /var/www/attendance
+  - cp -a /opt/attendance/frontend/dist/. /var/www/attendance/
+  - rm -f /etc/nginx/sites-enabled/default
+  - ln -sfn /etc/nginx/sites-available/attendance /etc/nginx/sites-enabled/attendance
+  - nginx -t
+  - systemctl reload-or-restart nginx
+  - curl --fail --silent --show-error --retry 5 --retry-connrefused --retry-delay 2 -o /dev/null http://127.0.0.1/
+  - install -d /var/lib/attendance
+  - touch /var/lib/attendance/bootstrap.ready
+  - echo 'Attendance frontend listo.'

@@ -112,6 +112,52 @@ terraform -chdir=infra output
 Los demás pueden actualizar `master` y ejecutar `plan`: si AWS coincide con la
 configuración, debería indicar que no hay cambios pendientes.
 
+## 6. Aplicación instalada por cloud-init
+
+Cada EC2 recibe como `user_data` la plantilla `#cloud-config` de su rol:
+`infra/templates/cloud-init-backend.yaml.tftpl` o `cloud-init-frontend.yaml.tftpl`.
+Cada plantilla tiene tres bloques: `packages` instala software con apt,
+`write_files` crea los scripts y la configuración que no están en los repositorios
+(servicio systemd, nginx), y `runcmd` ejecuta los pasos en orden. Node.js 24 se
+instala en `runcmd` porque el paquete `nodejs` de Ubuntu 24.04 es la versión 18.
+En el primer arranque, cloud-init deja la aplicación funcionando sin SSH:
+
+- **backend**: instala PostgreSQL local, genera la contraseña de la base y el
+  `JWT_SECRET` dentro de la instancia, clona `attendance-core`, compila, ejecuta
+  migraciones y seeds, y arranca el servicio `attendance-backend` en el puerto 5000.
+- **frontend**: clona `attendance-web`, compila con el dominio `sslip.io` de su IP
+  pública y lo publica con nginx, que reenvía `/core/api/v1` a la IP privada fija
+  del backend (`10.84.1.10`).
+
+Los repositorios deben ser públicos. La rama se elige con `backend_ref` y
+`frontend_ref` (por defecto `master`). Tarda unos 10 minutos después de `apply`.
+Para seguir el avance desde la instancia:
+
+```bash
+sudo cloud-init status --wait
+sudo tail -f /var/log/cloud-init-output.log
+```
+
+Sin SSH, `aws ec2 get-console-output --instance-id <id> --latest` muestra el mismo log.
+Abre `frontend_demo_url` e inicia sesión con `admin@core.com` / `demo!` (tenant
+`demo`) o `superadmin@core.com` / `demo`. Cambiar la plantilla reemplaza las instancias.
+
+## Probar en una cuenta personal
+
+Para ensayar sin tocar el entorno del equipo, usa otra cuenta y otro estado. Copia
+los ejemplos a `.local/`, que Git ignora, y completa tus valores:
+
+```bash
+cp examples/personal.s3.tfbackend.example .local/personal.s3.tfbackend
+cp examples/personal.tfvars.json.example .local/personal.tfvars.json
+terraform -chdir=infra init -reconfigure -backend-config=../.local/personal.s3.tfbackend
+terraform -chdir=infra apply -var-file=../.local/personal.tfvars.json
+terraform -chdir=infra destroy -var-file=../.local/personal.tfvars.json
+```
+
+El bucket del estado debe existir en tu cuenta. Antes de volver al entorno del
+equipo, ejecuta `terraform -chdir=infra init -reconfigure` sin `-backend-config`.
+
 ## Recordatorios
 
 - El estado en S3 se actualiza automáticamente y tiene bloqueo para evitar

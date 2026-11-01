@@ -92,3 +92,35 @@ variable "pnpm_version" {
     error_message = "Provide an exact pnpm release number."
   }
 }
+
+variable "backend_repo" {
+  description = "Public HTTPS Git URL of the NestJS API, cloned by cloud-init on the backend."
+  type        = string
+  default     = "https://github.com/Jalter-ego/attendance-core.git"
+  validation {
+    condition     = can(regex("^https://", var.backend_repo))
+    error_message = "Use a public HTTPS Git URL."
+  }
+}
+
+variable "backend_ref" {
+  description = "Branch or tag of the API that cloud-init deploys."
+  type        = string
+  default     = "master"
+}
+
+variable "frontend_repo" {
+  description = "Public HTTPS Git URL of the React app, cloned by cloud-init on the frontend."
+  type        = string
+  default     = "https://github.com/Jalter-ego/attendance-web.git"
+  validation {
+    condition     = can(regex("^https://", var.frontend_repo))
+    error_message = "Use a public HTTPS Git URL."
+  }
+}
+
+variable "frontend_ref" {
+  description = "Branch or tag of the React app that cloud-init deploys."
+  type        = string
+  default     = "master"
+}

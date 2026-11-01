@@ -1,0 +1,5 @@
+# Estado en una cuenta personal. Copia a .local/personal.s3.tfbackend y usa:
+#   terraform -chdir=infra init -reconfigure -backend-config=../.local/personal.s3.tfbackend
+bucket              = "attendance-tfstate-123456789012-us-east-2"
+key                 = "attendance/personal/terraform.tfstate"
+allowed_account_ids = ["123456789012"]

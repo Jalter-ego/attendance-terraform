@@ -25,6 +25,11 @@ resource "aws_key_pair" "operator" {
   public_key = file(pathexpand(var.ssh_public_key_path))
 }
 
+locals {
+  # IP fija: el frontend la recibe en su user_data sin depender de la otra instancia.
+  backend_private_ip = cidrhost(aws_subnet.public.cidr_block, 10)
+}
+
 resource "aws_instance" "app" {
   for_each = { frontend = aws_security_group.frontend.id, backend = aws_security_group.backend.id }
 
@@ -33,14 +38,19 @@ resource "aws_instance" "app" {
   ebs_optimized               = true
   monitoring                  = true
   subnet_id                   = aws_subnet.public.id
+  private_ip                  = each.key == "backend" ? local.backend_private_ip : null
   associate_public_ip_address = true
   vpc_security_group_ids      = [each.value]
   key_name                    = aws_key_pair.operator.key_name
   user_data_replace_on_change = true
-  user_data = templatefile("${path.module}/templates/cloud-init.sh.tftpl", {
-    role         = each.key
-    node_version = var.node_version
-    pnpm_version = var.pnpm_version
+  user_data = templatefile("${path.module}/templates/cloud-init-${each.key}.yaml.tftpl", {
+    node_version       = var.node_version
+    pnpm_version       = var.pnpm_version
+    backend_repo       = var.backend_repo
+    backend_ref        = var.backend_ref
+    frontend_repo      = var.frontend_repo
+    frontend_ref       = var.frontend_ref
+    backend_private_ip = local.backend_private_ip
   })
 
   root_block_device {

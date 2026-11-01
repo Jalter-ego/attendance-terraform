@@ -1,0 +1,122 @@
+#cloud-config
+# Backend de attendance: PostgreSQL local y API NestJS, instalados en el primer arranque.
+# Plantilla compartida con Pulumi y CloudFormation: la sintaxis de llaves con dolar
+# queda reservada a sus variables; los comandos usan $VAR sin llaves.
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+  - xz-utils
+  - openssl
+  - postgresql
+
+swap:
+  filename: /swapfile
+  size: 2147483648
+
+write_files:
+  - path: /usr/local/sbin/attendance-install-node
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Node.js 24 oficial (el paquete nodejs de Ubuntu 24.04 es la version 18) y pnpm.
+      set -euo pipefail
+      NODE_VERSION=$1
+      PNPM_VERSION=$2
+      ARCHIVE="node-v$NODE_VERSION-linux-x64.tar.xz"
+      install -d /var/tmp/attendance-node
+      cd /var/tmp/attendance-node
+      curl --fail --show-error --location --retry 4 --remote-name "https://nodejs.org/dist/v$NODE_VERSION/$ARCHIVE"
+      curl --fail --show-error --location --retry 4 --remote-name "https://nodejs.org/dist/v$NODE_VERSION/SHASUMS256.txt"
+      grep " $ARCHIVE$" SHASUMS256.txt | sha256sum --check -
+      tar -xJf "$ARCHIVE" -C /usr/local --strip-components=1
+      npm install --global "pnpm@$PNPM_VERSION"
+
+  - path: /usr/local/sbin/attendance-create-db
+    permissions: '0700'
+    content: |
+      #!/bin/bash
+      # Los secretos se generan en la instancia: no viajan en el user_data.
+      set -euo pipefail
+      DB_PASSWORD=$(openssl rand -hex 24)
+      JWT_SECRET=$(openssl rand -hex 32)
+      runuser -u postgres -- psql -v ON_ERROR_STOP=1 -v pw="$DB_PASSWORD" <<'SQL'
+      CREATE ROLE attendance LOGIN PASSWORD :'pw';
+      CREATE DATABASE attendance_db OWNER attendance;
+      SQL
+      install -d -m 750 -g ubuntu /etc/attendance
+      cat > /etc/attendance/backend.env <<ENV
+      NODE_ENV=production
+      PORT=5000
+      CORS_ORIGIN=*
+      DB_SSL=false
+      DB_READ_HOST=127.0.0.1
+      DB_READ_PORT=5432
+      DB_READ_USERNAME=attendance
+      DB_READ_PASSWORD=$DB_PASSWORD
+      DB_READ_NAME=attendance_db
+      DB_WRITE_HOST=127.0.0.1
+      DB_WRITE_PORT=5432
+      DB_WRITE_USERNAME=attendance
+      DB_WRITE_PASSWORD=$DB_PASSWORD
+      DB_WRITE_NAME=attendance_db
+      JWT_SECRET=$JWT_SECRET
+      JWT_EXPIRES_IN=8h
+      ENV
+      chown root:ubuntu /etc/attendance/backend.env
+      chmod 640 /etc/attendance/backend.env
+
+  - path: /usr/local/sbin/attendance-build-backend
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      # Se ejecuta como ubuntu. sequelize-cli solo define el entorno development.
+      set -euo pipefail
+      cd /opt/attendance/backend
+      set -a; . /etc/attendance/backend.env; set +a
+      export NODE_ENV=development
+      pnpm install --frozen-lockfile
+      pnpm build
+      pnpm db:migrate
+      pnpm db:seed
+
+  - path: /etc/systemd/system/attendance-backend.service
+    content: |
+      [Unit]
+      Description=Attendance NestJS API
+      After=network-online.target postgresql.service
+      Wants=network-online.target
+      Requires=postgresql.service
+
+      [Service]
+      Type=simple
+      User=ubuntu
+      Group=ubuntu
+      WorkingDirectory=/opt/attendance/backend
+      EnvironmentFile=/etc/attendance/backend.env
+      ExecStart=/usr/local/bin/node dist/src/main.js
+      Restart=on-failure
+      RestartSec=5
+      NoNewPrivileges=true
+      PrivateTmp=true
+      UMask=0027
+
+      [Install]
+      WantedBy=multi-user.target
+
+runcmd:
+  - set -e
+  - /usr/local/sbin/attendance-install-node '${node_version}' '${pnpm_version}'
+  - systemctl enable --now postgresql
+  - /usr/local/sbin/attendance-create-db
+  - install -d -o ubuntu -g ubuntu /opt/attendance
+  - sudo -u ubuntu -H git clone --depth 1 --branch '${backend_ref}' '${backend_repo}' /opt/attendance/backend
+  - sudo -u ubuntu -H /usr/local/sbin/attendance-build-backend
+  - systemctl daemon-reload
+  - systemctl enable --now attendance-backend
+  - curl --fail --silent --show-error --retry 30 --retry-connrefused --retry-delay 2 -o /dev/null http://127.0.0.1:5000/core/api/v1
+  - install -d /var/lib/attendance
+  - touch /var/lib/attendance/bootstrap.ready
+  - echo 'Attendance backend listo.'
